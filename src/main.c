@@ -3,6 +3,11 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#ifdef __loongarch__
+#include <larchintrin.h>
+#else
+#error this program is only meant for usage on LoongArch
+#endif
 
 #define __unused __attribute__((unused))
 
@@ -77,6 +82,8 @@ static void emit_n_insns_dj(void *buf, int n, enum measurement_mode mode, uint32
 static long measure_rdtime_delta(int n, enum measurement_mode mode, uint32_t opcode)
 {
     emit_n_insns_dj(payload, n, mode, opcode);
+    __dbar(0);
+    __ibar(0);
     return ((payload_fn_t)payload)();
 }
 
