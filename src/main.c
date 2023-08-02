@@ -18,6 +18,11 @@ enum measurement_mode {
     MODE_ISSUE_WIDTH,
 };
 
+enum insn_format {
+    FMT_DJ,
+    FMT_DJK,
+};
+
 static void *payload;
 
 static uint32_t insn_dj(uint32_t opcode, uint32_t d, uint32_t j)
@@ -27,28 +32,56 @@ static uint32_t insn_dj(uint32_t opcode, uint32_t d, uint32_t j)
     return (opcode & 0xfffffc00) | (j << 5) | d;
 }
 
-static uint32_t *emit_linear_latency_seq(uint32_t *buf, int n, uint32_t opcode)
+static uint32_t insn_djk(uint32_t opcode, uint32_t d, uint32_t j, uint32_t k)
+{
+    assert(d <= 31);
+    assert(j <= 31);
+    assert(k <= 31);
+    return (opcode & 0xffff8000) | (k << 10) | (j << 5) | d;
+}
+
+static uint32_t *emit_linear_latency_seq(uint32_t *buf, int n, enum insn_format fmt, uint32_t opcode)
 {
     // opcode $a1, $a1, ...
     // and hope this is some real data dependency
-    uint32_t fill = insn_dj(opcode, 5, 5);
+    uint32_t fill;
+    switch (fmt) {
+    case FMT_DJ:
+        fill = insn_dj(opcode, 5, 5);
+        break;
+    case FMT_DJK:
+        fill = insn_djk(opcode, 5, 5, 5);
+        break;
+    }
+
     for (int i = 0; i < n; i++)
         *buf++ = fill;
+
     return buf;
 }
 
-static uint32_t *emit_issue_width_seq(uint32_t *buf, int n, uint32_t opcode)
+static uint32_t *emit_issue_width_seq(uint32_t *buf, int n, enum insn_format fmt, uint32_t opcode)
 {
     for (int i = 0; i < n; i++) {
         // opcode $X, $X, ...
         // where X loops from $a1 (r5) to $t8 (r20)
         uint32_t reg = 5 + i % 16;
-        *buf++ = insn_dj(opcode, reg, reg);
+        uint32_t insn;
+        switch (fmt) {
+        case FMT_DJ:
+            insn = insn_dj(opcode, reg, reg);
+            break;
+        case FMT_DJK:
+            insn = insn_djk(opcode, reg, reg, reg);
+            break;
+        }
+        *buf++ = insn;
     }
+
     return buf;
 }
 
-static void emit_n_insns_dj(void *buf, int n, enum measurement_mode mode, uint32_t opcode)
+static void emit_n_insns(void *buf, int n, enum measurement_mode mode, enum insn_format fmt, uint32_t opcode)
 {
     uint32_t *insns = (uint32_t *)buf;
 
@@ -65,10 +98,10 @@ static void emit_n_insns_dj(void *buf, int n, enum measurement_mode mode, uint32
 
     switch (mode) {
     case MODE_LINEAR_LATENCY:
-        insns = emit_linear_latency_seq(insns, n, opcode);
+        insns = emit_linear_latency_seq(insns, n, fmt, opcode);
         break;
     case MODE_ISSUE_WIDTH:
-        insns = emit_issue_width_seq(insns, n, opcode);
+        insns = emit_issue_width_seq(insns, n, fmt, opcode);
         break;
     default:
         __builtin_unreachable();
@@ -79,9 +112,9 @@ static void emit_n_insns_dj(void *buf, int n, enum measurement_mode mode, uint32
     *insns++ = 0x4c000020;  // ret
 }
 
-static long measure_rdtime_delta(int n, enum measurement_mode mode, uint32_t opcode)
+static long measure_rdtime_delta(int n, enum measurement_mode mode, enum insn_format fmt, uint32_t opcode)
 {
-    emit_n_insns_dj(payload, n, mode, opcode);
+    emit_n_insns(payload, n, mode, fmt, opcode);
     __dbar(0);
     __ibar(0);
     return ((payload_fn_t)payload)();
@@ -103,34 +136,34 @@ int main(int argc __unused, const char *const argv[] __unused)
     payload = mmap(NULL, JIT_BUFFER_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
 
     long delta;
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, 0x00001000 /* clo.w */);
+    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJ, 0x00001000 /* clo.w */);
     printf("%d times of clo.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, 0x00001000 /* clo.w */);
+    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJ, 0x00001000 /* clo.w */);
     printf("%d times of independent clo.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, 0x001c0000 /* mul.w */);
+    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJK, 0x001c0000 /* mul.w */);
     printf("%d times of mul.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, 0x001c0000 /* mul.w */);
+    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJK, 0x001c0000 /* mul.w */);
     printf("%d times of independent mul.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, 0x00240000 /* crc.w.b.w */);
+    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJK, 0x00240000 /* crc.w.b.w */);
     printf("%d times of crc.w.b.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, 0x00240000 /* crc.w.b.w */);
+    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJK, 0x00240000 /* crc.w.b.w */);
     printf("%d times of independent crc.w.b.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, 0x01140400 /* fabs.s */);
+    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJ, 0x01140400 /* fabs.s */);
     printf("%d times of fabs.s: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, 0x01140400 /* fabs.s */);
+    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJ, 0x01140400 /* fabs.s */);
     printf("%d times of independent fabs.s: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, 0x01140800 /* fabs.d */);
+    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJ, 0x01140800 /* fabs.d */);
     printf("%d times of fabs.d: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, 0x01140800 /* fabs.d */);
+    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJ, 0x01140800 /* fabs.d */);
     printf("%d times of independent fabs.d: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
 
     munmap(payload, JIT_BUFFER_SIZE);
