@@ -31,6 +31,7 @@ enum measurement_mode {
 enum insn_format {
     FMT_DJ,
     FMT_DJK,
+    FMT_JK,
 };
 
 static void *payload;
@@ -50,6 +51,13 @@ static uint32_t insn_djk(uint32_t opcode, uint32_t d, uint32_t j, uint32_t k)
     return (opcode & 0xffff8000) | (k << 10) | (j << 5) | d;
 }
 
+static uint32_t insn_jk(uint32_t opcode, uint32_t j, uint32_t k)
+{
+    assert(j <= 31);
+    assert(k <= 31);
+    return (opcode & 0xffff801f) | (k << 10) | (j << 5);
+}
+
 static uint32_t *emit_linear_latency_seq(uint32_t *buf, int n, enum insn_format fmt, uint32_t opcode)
 {
     // opcode $a1, $a1, ...
@@ -61,6 +69,9 @@ static uint32_t *emit_linear_latency_seq(uint32_t *buf, int n, enum insn_format 
         break;
     case FMT_DJK:
         fill = insn_djk(opcode, 5, 5, 5);
+        break;
+    case FMT_JK:
+        fill = insn_jk(opcode, 5, 5);
         break;
     }
 
@@ -83,6 +94,9 @@ static uint32_t *emit_issue_width_seq(uint32_t *buf, int n, enum insn_format fmt
             break;
         case FMT_DJK:
             insn = insn_djk(opcode, reg, reg, reg);
+            break;
+        case FMT_JK:
+            insn = insn_jk(opcode, reg, reg);
             break;
         }
         *buf++ = insn;
@@ -148,10 +162,28 @@ int main(int argc __unused, const char *const argv[] __unused)
     payload = mmap(NULL, JIT_BUFFER_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
 
     measure_one_insn(FMT_DJ, 0x00001000, "clo.w");
+    measure_one_insn(FMT_DJ, 0x729c0800, "vclo.w");
+    measure_one_insn(FMT_DJ, 0x769c0800, "xvclo.w");
     measure_one_insn(FMT_DJK, 0x001c0000, "mul.w");
     measure_one_insn(FMT_DJK, 0x00240000, "crc.w.b.w");
     measure_one_insn(FMT_DJ, 0x01140400, "fabs.s");
     measure_one_insn(FMT_DJ, 0x01140800, "fabs.d");
+    measure_one_insn(FMT_DJK, 0x001a0000, "rotr.b");
+    measure_one_insn(FMT_DJK, 0x001a8000, "rotr.h");
+    measure_one_insn(FMT_DJK, 0x001b0000, "rotr.w");
+    measure_one_insn(FMT_DJK, 0x001b8000, "rotr.d");
+    measure_one_insn(FMT_DJK, 0x70ee0000, "vrotr.b");
+    measure_one_insn(FMT_DJK, 0x70ee8000, "vrotr.h");
+    measure_one_insn(FMT_DJK, 0x70ef0000, "vrotr.w");
+    measure_one_insn(FMT_DJK, 0x70ef8000, "vrotr.d");
+    measure_one_insn(FMT_DJK, 0x74ee0000, "xvrotr.b");
+    measure_one_insn(FMT_DJK, 0x74ee8000, "xvrotr.h");
+    measure_one_insn(FMT_DJK, 0x74ef0000, "xvrotr.w");
+    measure_one_insn(FMT_DJK, 0x74ef8000, "xvrotr.d");
+    measure_one_insn(FMT_JK, 0x003f8000, "x86rotr.b");
+    measure_one_insn(FMT_JK, 0x003f8001, "x86rotr.h");
+    measure_one_insn(FMT_JK, 0x003f8002, "x86rotr.w");
+    measure_one_insn(FMT_JK, 0x003f8003, "x86rotr.d");
 
     munmap(payload, JIT_BUFFER_SIZE);
 
