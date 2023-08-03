@@ -11,6 +11,16 @@
 
 #define __unused __attribute__((unused))
 
+// 2.5GHz (cycle freq) / 100MHz (stable counter freq) = 25
+// minimum granularity is 25 insns -> 1 rdtime delta
+// for reliable measurement of quantization of the instruction pattern in the
+// face of random fluctuations, let's make the repetition times larger than
+// this still
+#define N 10000
+
+// too lazy to figure out an exact number
+#define JIT_BUFFER_SIZE 131072
+
 typedef long (*payload_fn_t)(void);
 
 enum measurement_mode {
@@ -120,51 +130,28 @@ static long measure_rdtime_delta(int n, enum measurement_mode mode, enum insn_fo
     return ((payload_fn_t)payload)();
 }
 
-// 2.5GHz (cycle freq) / 100MHz (stable counter freq) = 25
-// minimum granularity is 25 insns -> 1 rdtime delta
-// for reliable measurement of quantization of the instruction pattern in the
-// face of random fluctuations, let's make the repetition times larger than
-// this still
-#define N 10000
+static void measure_one_insn(enum insn_format fmt, uint32_t opcode, const char *mnemonic)
+{
+    long delta;
 
-// too lazy to figure out an exact number
-#define JIT_BUFFER_SIZE 131072
+    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, fmt, opcode);
+    printf("%d times of %s: rdtime delta = %ld (~%ld cycles)\n", N, mnemonic, delta, delta * 25);
+
+    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, fmt, opcode);
+    printf("%d times of independent %s: rdtime delta = %ld (~%ld cycles)\n", N, mnemonic, delta, delta * 25);
+}
+
 
 int main(int argc __unused, const char *const argv[] __unused)
 {
     // RWX memory hehe
     payload = mmap(NULL, JIT_BUFFER_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
 
-    long delta;
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJ, 0x00001000 /* clo.w */);
-    printf("%d times of clo.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJ, 0x00001000 /* clo.w */);
-    printf("%d times of independent clo.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJK, 0x001c0000 /* mul.w */);
-    printf("%d times of mul.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJK, 0x001c0000 /* mul.w */);
-    printf("%d times of independent mul.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJK, 0x00240000 /* crc.w.b.w */);
-    printf("%d times of crc.w.b.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJK, 0x00240000 /* crc.w.b.w */);
-    printf("%d times of independent crc.w.b.w: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJ, 0x01140400 /* fabs.s */);
-    printf("%d times of fabs.s: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJ, 0x01140400 /* fabs.s */);
-    printf("%d times of independent fabs.s: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_LINEAR_LATENCY, FMT_DJ, 0x01140800 /* fabs.d */);
-    printf("%d times of fabs.d: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
-
-    delta = measure_rdtime_delta(N, MODE_ISSUE_WIDTH, FMT_DJ, 0x01140800 /* fabs.d */);
-    printf("%d times of independent fabs.d: rdtime delta = %ld (~%ld cycles)\n", N, delta, delta * 25);
+    measure_one_insn(FMT_DJ, 0x00001000, "clo.w");
+    measure_one_insn(FMT_DJK, 0x001c0000, "mul.w");
+    measure_one_insn(FMT_DJK, 0x00240000, "crc.w.b.w");
+    measure_one_insn(FMT_DJ, 0x01140400, "fabs.s");
+    measure_one_insn(FMT_DJ, 0x01140800, "fabs.d");
 
     munmap(payload, JIT_BUFFER_SIZE);
 
